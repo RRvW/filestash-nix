@@ -1,8 +1,8 @@
 {
   description = "A Flake for Mickael Kerjean's Filestash";
   nixConfig = {
-    # extra-substituters = [ "https://matthewcroughan.cachix.org" ];
-    # extra-trusted-public-keys = [ "matthewcroughan.cachix.org-1:fON2C9BdzJlp1qPan4t5AF0xlnx8sB0ghZf8VDo7+e8=" ];
+    extra-substituters = [ "https://rrvw.cachix.org" ];
+    extra-trusted-public-keys = [ "rrvw.cachix.org-1:caBqslbvcjJFC/n1hphsTZOQZScQLeF3DA5ukytHR4U=" ];
   };
   inputs = {
     filestash-src = {

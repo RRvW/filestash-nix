@@ -26,7 +26,7 @@ in {
         after = [ "network-online.target" ];
         serviceConfig = {
           Type = "simple";
-          ExecStart = "${pkgs.bash}/bin/bash -c 'WORK_DIR=$STATE_DIRECTORY ${lib.getExe cfg.package}'";
+          ExecStart = "${pkgs.bash}/bin/bash -c 'FILESTASH_PATH=$STATE_DIRECTORY ${lib.getExe cfg.package}'";
           Restart = "always";
           DynamicUser = true;
           StateDirectory = baseNameOf cfg.dataDir;

@@ -19,10 +19,6 @@ in {
   };
   config = lib.mkIf cfg.enable {
     systemd = {
-      tmpfiles.rules = [
-        "d  ${cfg.dataDir}/data        0771 - - - -"
-        "d  ${cfg.dataDir}/data/state  0771 - - - -"
-      ];
       services.filestash = {
         description = "A modern web client for SFTP and more";
         wantedBy = [ "multi-user.target" ];

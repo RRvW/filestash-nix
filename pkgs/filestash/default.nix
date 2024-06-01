@@ -1,47 +1,73 @@
-{ buildGoModule
-, dream2nix
+{ lib
+, buildNpmPackage
 , filestash-src
+, buildGoModule
 , glib
 , gotools
 , libraw
 , pkg-config
 , pkgs
-, python
-, self
+, pluginImageC ? false # Use plugin for image thumbnails based on C libraries
+, giflib
+, libwebp
+, libheif
+, libjpeg
+, libtiff
+, libpng
+, brotli
 , stdenv
 , vips
 , util-linux
 , writeShellScriptBin
+
 }:
+
 let
-  updateScript = (dream2nix.lib.makeFlakeOutputs {
-    inherit pkgs;
-    config.projectRoot = filestash-src;
-    source = filestash-src;
-    settings = [ { subsystemInfo.nodejs = "14"; subsystemInfo.npmArgs = "--legacy-peer-deps"; } ];
-    autoProjects = true;
-  }).packages.${pkgs.hostPlatform.system}.filestash.resolve;
-  frontend = ((dream2nix.lib.init { inherit pkgs; }).dream2nix-interface.makeOutputsForDreamLock {
-    dreamLock = ../../dream2nix-packages/filestash/dream-lock.json;
-    sourceOverrides = oldSources: {
-      "filestash"."0.0.0" = filestash-src;
+  frontend = buildNpmPackage {
+    pname = "filestash-src";
+    version = "0.0.0";
+
+    src = filestash-src;
+    patches = [ ./fix-vm-polyfill.patch ];
+
+    postPatch = ''
+      cp ${./package.json} ./package.json
+      cp ${./package-lock.json} ./package-lock.json
+    '';
+
+    nativeBuildInputs = [ brotli ];
+
+    npmDepsHash = "sha256-l/uXjPkvqSnQ/xtPrcjtc2poJeAb+4NXKoX5NR1Hb7M=";
+    #    npmDepsHash = "sha256-TfbzfwD08ewx18B0A14cjKH+eovzLYeOrwYdJoUdizM=";
+    makeCacheWritable = true;
+    # The prepack script runs the build script, which we'd rather do in the build phase.
+    npmPackFlags = [ "--ignore-scripts" ];
+    npmFlags = [ "--legacy-peer-deps" ];
+    NODE_OPTIONS = "--openssl-legacy-provider";
+
+    npmBuildScript = "build";
+
+    # Compress static files
+    postBuild = ''
+      make -C public compress
+    '';
+
+    # Webpack output is not copied by buildNpmPackage
+    postInstall = ''
+      cp -rv server/ctrl/static/www "$out/lib/node_modules/filestash/server/ctrl/static/www"
+    '';
+
+    meta = with lib; {
+      description = "Filestash Frontend";
+      homepage = "https://filestash.app";
+      license = licenses.agpl3Only;
     };
-    packageOverrides = {
-      node-sass = {
-        add-pre-build-steps = {
-          buildInputs = old: old ++ [
-            pkgs.python
-          ];
-        };
-      };
-    };
-  }).packages.filestash;
+  };
+
   libtranscode = stdenv.mkDerivation {
     name = "libtranscode";
     src = filestash-src + "/server/plugin/plg_image_light/deps/src";
-    buildInputs = [
-      libraw
-    ];
+    buildInputs = [ libraw ];
     buildPhase = ''
       $CC -Wall -c libtranscode.c
       ar rcs libtranscode.a libtranscode.o
@@ -54,13 +80,8 @@ let
   libresize = stdenv.mkDerivation {
     name = "libresize";
     src = filestash-src + "/server/plugin/plg_image_light/deps/src";
-    buildInputs = [
-      vips
-      glib
-    ];
-    nativeBuildInputs = [
-      pkg-config
-    ];
+    buildInputs = [ vips glib ];
+    nativeBuildInputs = [ pkg-config ];
     buildPhase = ''
       $CC -Wall -c libresize.c `pkg-config --cflags glib-2.0`
       ar rcs libresize.a libresize.o
@@ -72,20 +93,24 @@ let
   };
 in
 buildGoModule {
-  passthru.update = updateScript;
   pname = "filestash";
   version = "unstable-" + filestash-src.shortRev;
-
+  inherit frontend;
   src = frontend + "/lib/node_modules/filestash";
 
-  vendorHash = null;
-
+  vendorHash = "sha256-ICikIZ7nJtV7lh+w5qD1CoXrsxJbYotn1XI+CAquNKI=";
+  #proxyVendor = true;
   excludedPackages = [
     "server/generator"
     "server/plugin/plg_starter_http2"
     "server/plugin/plg_starter_https"
     "server/plugin/plg_search_sqlitefts"
-  ];
+    "server/plugin/plg_image_thumbnail"
+    "external"
+    "public"
+  ] ++ lib.optional (!pluginImageC)
+    "server/plugin/plg_image_c"
+  ;
 
   buildInputs = [
     glib
@@ -93,6 +118,13 @@ buildGoModule {
     libresize
     libtranscode
     vips
+  ] ++ lib.optionals pluginImageC [
+    giflib
+    libwebp
+    libheif
+    libjpeg
+    libtiff
+    libpng
   ];
 
   nativeBuildInputs = [
@@ -109,15 +141,33 @@ buildGoModule {
     ./fix-impure-build-date.patch
   ];
 
+  preBuild = ''
+    go generate -x ./server/...
+  '';
+
+  postInstall = ''
+    mv $out/bin/cmd $out/bin/filestash
+  '';
+
   postPatch =
     let
       platform = {
         aarch64-linux = "linux_arm";
         x86_64-linux = "linux_amd64";
-      }.${pkgs.hostPlatform.system} or (throw "Unsupported system: ${pkgs.hostPlatform.system}");
+      }.${pkgs.hostPlatform.system} or (throw
+        "Unsupported system: ${pkgs.hostPlatform.system}");
     in
+    lib.optionalString (!pluginImageC) ''
+      sed -i s/plg_image_c/plg_image_golang/g  server/plugin/index.go # Fixing C build is too much effort
+      echo "Patched out plg_image_c"
+    '' +
     ''
-      substituteInPlace server/generator/constants.go --subst-var-by build_date '${toString filestash-src.lastModified}'
+      cp -r ${./external} external # Copy in nonfunctioning package
+      echo 'replace github.com/tredoe/osutil => ./external/github.com/tredoe/osutil'  >> go.mod
+
+      substituteInPlace server/generator/constants.go --subst-var-by build_date '${
+        toString filestash-src.lastModified
+      }'
 
       ## fix "imported and not used" errors
       goimports -w server/
@@ -128,13 +178,13 @@ buildGoModule {
       ## server/** requires globstar
       shopt -s globstar
       rename --no-overwrite --verbose linux_arm.go linux_arm64.go server/**
-    '';
+    ''
+  ;
 
-  preBuild = ''
-    make build_init
-  '';
+  meta = with lib; {
+    description = "Filestash Frontend";
+    homepage = "https://filestash.app";
+    license = licenses.agpl3Only;
+  };
 
-  postInstall = ''
-    mv $out/bin/server $out/bin/filestash
-  '';
 }
